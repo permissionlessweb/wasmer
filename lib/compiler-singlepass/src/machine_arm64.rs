@@ -4749,8 +4749,12 @@ impl Machine for MachineARM64 {
         let src2 = self.location_to_reg(Size::S64, loc_b, &mut temps, ImmType::None, true, None)?;
         let dest = self.location_to_reg(Size::S64, ret, &mut temps, ImmType::None, false, None)?;
 
+        // The trap label is emitted after the function. A short cbz reaches
+        // only 1048572 bytes, so a long function fails relocation on AArch64.
+        // udiv32 and the signed division helper already use the far form.
+        // Upstream main has this call; no release through 7.5.0 does.
         self.assembler
-            .emit_cbz_label(Size::S64, src2, integer_division_by_zero)?;
+            .emit_cbz_label_far(Size::S64, src2, integer_division_by_zero)?;
         let offset = self.mark_instruction_with_trap_code(TrapCode::IntegerOverflow);
         self.assembler.emit_udiv(Size::S64, src1, src2, dest)?;
         if ret != dest {
