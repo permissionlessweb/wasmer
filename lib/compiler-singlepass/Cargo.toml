@@ -14,13 +14,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-wasmer-compiler = { path = "../compiler", version = "=7.5.0", features = [
-  "translator",
-  "compiler",
-] }
-wasmer-types = { path = "../types", version = "=7.5.0", features = [
-  "std",
-], default-features = false }
+# crates.io, not the sibling path. A path dependency compiles a second
+# wasmer-compiler, and the crates.io wasmer 7.5.0 crate cannot see it.
+wasmer-compiler = { version = "=7.5.0", features = ["translator", "compiler"] }
+wasmer-types = { version = "=7.5.0", features = ["std"], default-features = false }
 hashbrown = { workspace = true, optional = true }
 gimli = { workspace = true, optional = true }
 enumset.workspace = true
