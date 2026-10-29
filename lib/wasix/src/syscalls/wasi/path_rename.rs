@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
-
 use super::*;
 use crate::syscalls::*;
 
@@ -67,17 +65,6 @@ pub fn path_rename_internal(
 
     let mut moved_ephemeral_symlink = false;
 
-    {
-        let source_fd = wasi_try_ok!(state.fs.get_fd(source_fd));
-        if !source_fd.inner.rights.contains(Rights::PATH_RENAME_SOURCE) {
-            return Ok(Errno::Access);
-        }
-        let target_fd = wasi_try_ok!(state.fs.get_fd(target_fd));
-        if !target_fd.inner.rights.contains(Rights::PATH_RENAME_TARGET) {
-            return Ok(Errno::Access);
-        }
-    }
-
     // this is to be sure the source file is fetched from the filesystem if needed
     let source_inode = wasi_try_ok!(state.fs.get_inode_at_path(
         inodes,
@@ -89,18 +76,31 @@ pub fn path_rename_internal(
     let _ = state
         .fs
         .get_inode_at_path(inodes, target_fd, target_path, true);
-    let (source_parent_inode, source_entry_name) = wasi_try_ok!(state.fs.get_parent_inode_at_path(
-        inodes,
-        source_fd,
-        Path::new(source_path),
-        true
-    ));
-    let (target_parent_inode, target_entry_name) = wasi_try_ok!(state.fs.get_parent_inode_at_path(
-        inodes,
-        target_fd,
-        Path::new(target_path),
-        true
-    ));
+    let (source_parent_inode, source_owner, source_entry_name) = wasi_try_ok!(
+        state
+            .fs
+            .get_owned_parent_inode_at_path(inodes, source_fd, Path::new(source_path), true)
+    );
+    let (target_parent_inode, target_owner, target_entry_name) = wasi_try_ok!(
+        state
+            .fs
+            .get_owned_parent_inode_at_path(inodes, target_fd, Path::new(target_path), true)
+    );
+    {
+        let source_fd = wasi_try_ok!(state.fs.get_fd(source_fd));
+        wasi_try_ok!(state.fs.check_path_right(
+            &source_fd,
+            &source_owner,
+            Rights::PATH_RENAME_SOURCE
+        ));
+        let target_fd = wasi_try_ok!(state.fs.get_fd(target_fd));
+        wasi_try_ok!(state.fs.check_path_right(
+            &target_fd,
+            &target_owner,
+            Rights::PATH_RENAME_TARGET
+        ));
+        wasi_try_ok!(state.fs.check_cross_preopen(&source_owner, &target_owner));
+    }
     let source_guest_path = {
         let guard = source_parent_inode.read();
         match guard.deref() {
@@ -341,11 +341,42 @@ fn rename_inode_tree(inode: &InodeGuard, source_dir_path: &Path, target_dir_path
 fn adjust_path(path: &Path, source_dir_path: &Path, target_dir_path: &Path) -> PathBuf {
     let path = crate::fs::PosixPath::from_path(path);
     let source_dir_path = crate::fs::PosixPath::from_path(source_dir_path);
-    let relative_path = path
-        .strip_prefix(&source_dir_path)
-        .with_context(|| format!("Expected path {path:?} to be a subpath of {source_dir_path:?}"))
-        .expect("Fatal filesystem error");
+    let Some(relative_path) = path.strip_prefix(&source_dir_path) else {
+        // A directory entry created by path_link may retain the backing path
+        // of its source when the mounted filesystem cannot materialize hard
+        // links. Moving its parent must move the entry, not that shared
+        // backing file.
+        return PathBuf::from(path.as_str());
+    };
     crate::fs::PosixPath::from_path(target_dir_path)
         .join(&relative_path)
         .into_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adjust_path;
+    use std::path::Path;
+
+    #[test]
+    fn moving_a_directory_preserves_external_hard_link_backing_paths() {
+        let adjusted = adjust_path(
+            Path::new("/store/files/content"),
+            Path::new("/workspace/package_tmp"),
+            Path::new("/workspace/package"),
+        );
+
+        assert_eq!(adjusted, Path::new("/store/files/content"));
+    }
+
+    #[test]
+    fn moving_a_directory_rebases_ordinary_descendants() {
+        let adjusted = adjust_path(
+            Path::new("/workspace/package_tmp/lib/index.js"),
+            Path::new("/workspace/package_tmp"),
+            Path::new("/workspace/package"),
+        );
+
+        assert_eq!(adjusted, Path::new("/workspace/package/lib/index.js"));
+    }
 }

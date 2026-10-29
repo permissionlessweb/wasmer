@@ -10,7 +10,7 @@ use super::{
         CtxType, FunctionCache, GlobalCache, Intrinsics, MemoryCache, tbaa_label, type_to_llvm,
     },
     // stackmap::{StackmapEntry, StackmapEntryKind, StackmapRegistry, ValueSemantic},
-    state::{ControlFrame, ExtraInfo, IfElseState, State, TagCatchInfo},
+    state::{ControlFrame, ExtraInfo, IfElseState, PhiLocation, State, TagCatchInfo},
 };
 use crate::{
     compiler::ModuleBasedSymbolRegistry, config::OptimizationStyle, object_file::CompiledFunction,
@@ -87,8 +87,8 @@ const CATCH_ALL_TAG_VALUE: i32 = i32::MAX;
 //   In WebAssembly, this manifests as a stack overflow.
 // - `instcombine` removes one of the NaN canonicalization checks for `sqrt`.
 
-const LLVM_OPT_O0_PASSES: &str = "function(ee-instrument<>),always-inline,coro-cond(coro-early,cgscc(coro-split),coro-cleanup,globaldce),alloc-token,function(annotation-remarks),verify";
-const LLVM_OPT_O1_PASSES: &str = "memprof-remove-attributes,annotation2metadata,forceattrs,inferattrs,coro-early,function<eager-inv>(ee-instrument<>,lower-expect,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,sroa<modify-cfg>,early-cse<>),openmp-opt,ipsccp,called-value-propagation,globalopt,function<eager-inv>(mem2reg,instcombine<max-iterations=1;no-verify-fixpoint>,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>),always-inline,require<globals-aa>,function(invalidate<aa>),require<profile-summary>,cgscc(devirt<4>(inline,function-attrs<skip-non-recursive-function-attrs>,function<eager-inv;no-rerun>(sroa<modify-cfg>,early-cse<memssa>,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,instcombine<max-iterations=1;no-verify-fixpoint>,libcalls-shrinkwrap,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,reassociate,loop-mssa(loop-instsimplify,loop-simplifycfg,licm<no-allowspeculation>,loop-rotate<header-duplication;no-prepare-for-lto>,licm<allowspeculation>,simple-loop-unswitch<no-nontrivial;trivial>),simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,instcombine<max-iterations=1;no-verify-fixpoint>,loop(loop-idiom,indvars,loop-deletion,loop-unroll-full),sroa<modify-cfg>,memcpyopt,sccp,bdce,instcombine<max-iterations=1;no-verify-fixpoint>,coro-elide,adce,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,instcombine<max-iterations=1;no-verify-fixpoint>),function-attrs,function(require<should-not-run-function-passes>),coro-split,coro-annotation-elide)),deadargelim,coro-cleanup,globalopt,globaldce,elim-avail-extern,rpo-function-attrs,recompute-globalsaa,function<eager-inv>(drop-unnecessary-assumes,float2int,lower-constant-intrinsics,loop(loop-rotate<header-duplication;no-prepare-for-lto>,loop-deletion),loop-distribute,inject-tli-mappings,loop-vectorize<no-interleave-forced-only;vectorize-forced-only;>,drop-unnecessary-assumes,infer-alignment,loop-load-elim,instcombine<max-iterations=1;no-verify-fixpoint>,simplifycfg<bonus-inst-threshold=1;forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;switch-to-lookup;no-keep-loops;hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,vector-combine,instcombine<max-iterations=1;no-verify-fixpoint>,loop-unroll<O1>,transform-warning,sroa<preserve-cfg>,infer-alignment,instcombine<max-iterations=1;no-verify-fixpoint>,loop-mssa(licm<allowspeculation>),alignment-from-assumptions,loop-sink,instsimplify,div-rem-pairs,tailcallelim,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables>),alloc-token,globaldce,constmerge,cg-profile,rel-lookup-table-converter,function(annotation-remarks),verify";
+const LLVM_OPT_O0_PASSES: &str = "function(ee-instrument<>),always-inline,coro-cond(coro-early,cgscc(coro-split),coro-cleanup,globaldce),alloc-token,lower-comment-string,function(annotation-remarks),verify";
+const LLVM_OPT_O1_PASSES: &str = "memprof-remove-attributes,annotation2metadata,forceattrs,inferattrs,coro-early,function<eager-inv>(ee-instrument<>,lower-expect,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,sroa<modify-cfg>,early-cse<>),openmp-opt,ipsccp,called-value-propagation,globalopt,function<eager-inv>(mem2reg,instcombine<max-iterations=1;no-verify-fixpoint>,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>),always-inline,require<globals-aa>,function(invalidate<aa>),require<profile-summary>,cgscc(devirt<4>(inline,function-attrs<skip-non-recursive-function-attrs>,function<eager-inv;no-rerun>(sroa<modify-cfg>,early-cse<memssa>,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,instcombine<max-iterations=1;no-verify-fixpoint>,libcalls-shrinkwrap,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,reassociate,loop-mssa(loop-instsimplify,loop-simplifycfg,licm<no-allowspeculation>,loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count>,licm<allowspeculation>,simple-loop-unswitch<no-nontrivial;trivial>),simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,instcombine<max-iterations=1;no-verify-fixpoint>,loop(loop-idiom,indvars,loop-deletion,loop-unroll-full),sroa<modify-cfg>,memcpyopt,sccp,bdce,instcombine<max-iterations=1;no-verify-fixpoint>,coro-elide,adce,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,instcombine<max-iterations=1;no-verify-fixpoint>),function-attrs,function(require<should-not-run-function-passes>),coro-split,coro-annotation-elide)),deadargelim,coro-cleanup,globalopt,globaldce,elim-avail-extern,rpo-function-attrs,recompute-globalsaa,function<eager-inv>(drop-unnecessary-assumes,float2int,lower-constant-intrinsics,loop(loop-rotate<header-duplication;no-prepare-for-lto;check-exit-count>,loop-deletion,loop-interchange),loop-distribute,inject-tli-mappings,loop-vectorize<no-interleave-forced-only;vectorize-forced-only;>,drop-unnecessary-assumes,infer-alignment,loop-load-elim,instcombine<max-iterations=1;no-verify-fixpoint>,simplifycfg<bonus-inst-threshold=1;forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;switch-to-lookup;no-keep-loops;hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables>,vector-combine,instcombine<max-iterations=1;no-verify-fixpoint>,loop-unroll<O1>,transform-warning,sroa<preserve-cfg;aggregate-to-vector>,infer-alignment,instcombine<max-iterations=1;no-verify-fixpoint>,loop-mssa(licm<allowspeculation>),alignment-from-assumptions,loop-sink,instsimplify,div-rem-pairs,mergeicmps,expand-memcmp,tailcallelim,simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables>),alloc-token,globaldce,constmerge,cg-profile,rel-lookup-table-converter,lower-comment-string,function(annotation-remarks),verify";
 const IGNORED_PASSES: &[&str] = &[
     "memcpyopt",
     "tailcallelim",
@@ -100,7 +100,7 @@ static LLVM_OPT_PASSES: OnceLock<[String; 2]> = OnceLock::new();
 fn llvm_opt_passes() -> &'static [String; 2] {
     LLVM_OPT_PASSES.get_or_init(|| {
         // Update the LLVM_OPT_Ox_PASSES constants based on the release!
-        debug_assert_eq!(get_llvm_version().0, 22);
+        debug_assert_eq!(get_llvm_version().0, 23);
 
         [LLVM_OPT_O0_PASSES, LLVM_OPT_O1_PASSES].map(|passes| {
             let mut passes = passes.to_string();
@@ -246,6 +246,8 @@ impl FuncTranslator {
         )?;
 
         let func = module.add_function(&function_name, func_type, Some(Linkage::External));
+        func.as_global_value()
+            .set_alignment(super::FUNCTION_ALIGNMENT);
         let debug_info = if config.experimental_artifact {
             let source_location = self.source_map.first_in_function(function_body);
             let debug_metadata_version = self
@@ -1059,7 +1061,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
         let int_type = left.get_type();
 
         let (min_value, neg_one_value) = if int_type == self.intrinsics.i32_ty {
-            let min_value = int_type.const_int(i32::MIN as u64, false);
+            let min_value = int_type.const_int(u64::from(i32::MIN as u32), false);
             let neg_one_value = int_type.const_int(-1i32 as u32 as u64, false);
             (min_value, neg_one_value)
         } else if int_type == self.intrinsics.i64_ty {
@@ -2874,11 +2876,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                     .get_insert_block()
                     .ok_or_else(|| CompileError::Codegen("not currently in a block".to_string()))?;
 
-                let phis = if frame.is_loop() {
-                    frame.loop_body_phis()
-                } else {
-                    frame.phis()
-                };
+                let phis = frame.phis(PhiLocation::LoopHeader);
 
                 let len = phis.len();
                 let values = self.state.peekn_extra(len)?;
@@ -2908,11 +2906,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                     .get_insert_block()
                     .ok_or_else(|| CompileError::Codegen("not currently in a block".to_string()))?;
 
-                let phis = if frame.is_loop() {
-                    frame.loop_body_phis()
-                } else {
-                    frame.phis()
-                };
+                let phis = frame.phis(PhiLocation::LoopHeader);
 
                 let param_stack = self.state.peekn_extra(phis.len())?;
                 let param_stack = param_stack
@@ -2949,11 +2943,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
 
                 let default_frame = self.state.frame_at_depth(targets.default())?;
 
-                let phis = if default_frame.is_loop() {
-                    default_frame.loop_body_phis()
-                } else {
-                    default_frame.phis()
-                };
+                let phis = default_frame.phis(PhiLocation::LoopHeader);
                 let args = self.state.peekn(phis.len())?;
 
                 for (phi, value) in phis.iter().zip(args.iter()) {
@@ -2973,11 +2963,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                         };
                         let case_index_literal =
                             self.context.i32_type().const_int(case_index as u64, false);
-                        let phis = if frame.is_loop() {
-                            frame.loop_body_phis()
-                        } else {
-                            frame.phis()
-                        };
+                        let phis = frame.phis(PhiLocation::LoopHeader);
                         for (phi, value) in phis.iter().zip(args.iter()) {
                             phi.add_incoming(&[(value, current_block)]);
                         }
@@ -3097,7 +3083,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                         CompileError::Codegen("not currently in a block".to_string())
                     })?;
 
-                    for phi in frame.phis().to_vec().iter().rev() {
+                    for phi in frame.phis(PhiLocation::LoopExit).to_vec().iter().rev() {
                         let (value, info) = self.state.pop1_extra()?;
                         let value = self.apply_pending_canonicalization(value, info)?;
                         phi.add_incoming(&[(&value, current_block)])
@@ -3139,7 +3125,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                     .ok_or_else(|| CompileError::Codegen("not currently in a block".to_string()))?;
 
                 if self.state.reachable {
-                    for phi in frame.phis().iter().rev() {
+                    for phi in frame.phis(PhiLocation::LoopExit).iter().rev() {
                         let (value, info) = self.state.pop1_extra()?;
                         let value = self.apply_pending_canonicalization(value, info)?;
                         phi.add_incoming(&[(&value, current_block)]);
@@ -3156,7 +3142,11 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                     ..
                 } = &frame
                 {
-                    for (phi, else_phi) in frame.phis().iter().zip(else_phis.iter()) {
+                    for (phi, else_phi) in frame
+                        .phis(PhiLocation::LoopExit)
+                        .iter()
+                        .zip(else_phis.iter())
+                    {
                         phi.add_incoming(&[(&else_phi.as_basic_value(), *if_else)]);
                     }
                     self.builder.position_at_end(*if_else);
@@ -3171,7 +3161,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                 self.state.reachable = true;
 
                 // Push each phi value to the value stack.
-                for phi in frame.phis() {
+                for phi in frame.phis(PhiLocation::LoopExit) {
                     if phi.count_incoming() != 0 {
                         self.state.push1(phi.as_basic_value());
                     } else {
@@ -3195,7 +3185,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                     .ok_or_else(|| CompileError::Codegen("not currently in a block".to_string()))?;
 
                 let frame = self.state.outermost_frame()?;
-                for phi in frame.phis().to_vec().iter().rev() {
+                for phi in frame.phis(PhiLocation::LoopExit).to_vec().iter().rev() {
                     let (arg, info) = self.state.pop1_extra()?;
                     let arg = self.apply_pending_canonicalization(arg, info)?;
                     phi.add_incoming(&[(&arg, current_block)]);
@@ -3237,7 +3227,10 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
 
             // Generate const values.
             Operator::I32Const { value } => {
-                let i = self.intrinsics.i32_ty.const_int(value as u64, false);
+                let i = self
+                    .intrinsics
+                    .i32_ty
+                    .const_int(u64::from(value as u32), false);
                 let info = if is_f32_arithmetic(value as u32) {
                     ExtraInfo::arithmetic_f32()
                 } else {
@@ -5013,7 +5006,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
                 let (v1, v2) = (v1.into_int_value(), v2.into_int_value());
                 let int_type = v1.get_type();
                 let (min_value, neg_one_value) = if int_type == self.intrinsics.i32_ty {
-                    let min_value = int_type.const_int(i32::MIN as u64, false);
+                    let min_value = int_type.const_int(u64::from(i32::MIN as u32), false);
                     let neg_one_value = int_type.const_int(-1i32 as u32 as u64, false);
                     (min_value, neg_one_value)
                 } else if int_type == self.intrinsics.i64_ty {
@@ -11969,7 +11962,11 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
 
                                 let frame = self.state.frame_at_depth(*label)?;
 
-                                for (phi, value) in frame.phis().iter().zip(values.iter()) {
+                                for (phi, value) in frame
+                                    .phis(PhiLocation::LoopHeader)
+                                    .iter()
+                                    .zip(values.iter())
+                                {
                                     phi.add_incoming(&[(value, b)])
                                 }
 
@@ -12034,7 +12031,11 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
 
                                 let frame = self.state.frame_at_depth(*label)?;
 
-                                for (phi, value) in frame.phis().iter().zip(values.iter()) {
+                                for (phi, value) in frame
+                                    .phis(PhiLocation::LoopHeader)
+                                    .iter()
+                                    .zip(values.iter())
+                                {
                                     phi.add_incoming(&[(value, b)])
                                 }
 
@@ -12056,7 +12057,7 @@ impl<'ctx> LLVMFunctionCodeGenerator<'ctx, '_> {
 
                                 let frame = self.state.frame_at_depth(*label)?;
 
-                                let phis = frame.phis();
+                                let phis = frame.phis(PhiLocation::LoopHeader);
 
                                 assert_eq!(phis.len(), 1);
                                 phis[0].add_incoming(&[(&exnref_phi.as_basic_value(), b)]);
